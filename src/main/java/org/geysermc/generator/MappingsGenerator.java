@@ -11,29 +11,44 @@ import com.nukkitx.nbt.NbtList;
 import com.nukkitx.nbt.NbtMap;
 import com.nukkitx.nbt.NbtType;
 import com.nukkitx.protocol.bedrock.data.LevelEventType;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
+import it.unimi.dsi.fastutil.ints.IntComparator;
+import it.unimi.dsi.fastutil.ints.IntIterator;
+import it.unimi.dsi.fastutil.ints.IntList;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.Registry;
 import net.minecraft.core.particles.ParticleType;
 import net.minecraft.data.BuiltinRegistries;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundEvent;
+import net.minecraft.world.InteractionResult;
 import net.minecraft.world.item.*;
 import net.minecraft.world.item.crafting.Ingredient;
 import net.minecraft.world.item.enchantment.Enchantment;
+import net.minecraft.world.level.ItemLike;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.ComposterBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.Property;
 import net.minecraft.world.level.material.MaterialColor;
 import net.minecraft.world.level.material.PushReaction;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.Vec3;
 import org.apache.commons.lang3.tuple.Pair;
 import org.geysermc.generator.state.StateMapper;
 import org.geysermc.generator.state.StateRemapper;
+import org.mockito.Mockito;
 import org.reflections.Reflections;
 
 import java.awt.*;
 import java.io.*;
+import java.lang.reflect.Field;
 import java.lang.reflect.Type;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
@@ -596,6 +611,44 @@ public class MappingsGenerator {
         }
     }
 
+    public void generateComposterItems() {
+        IntList list = new IntArrayList();
+        for (ItemLike item : ComposterBlock.COMPOSTABLES.keySet()) {
+            list.add(Registry.ITEM.getId(item.asItem()));
+        }
+        list.sort(Integer::compare);
+
+        JsonArray array = new JsonArray();
+        IntIterator it = list.iterator();
+        while (it.hasNext()) {
+            int i = it.nextInt();
+            array.add(i);
+        }
+
+        try {
+            GsonBuilder builder = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping();
+            JsonWriter writer = new JsonWriter(new FileWriter("mappings/compostables.json"));
+            writer.setIndent("\t"); // Tabs just to keep the diff nice for older mappings
+            builder.create().toJson(array, writer);
+            writer.close();
+            System.out.println("Finished composter writing process!");
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private static final ClientLevel MOCK_CLIENT = Mockito.mock(ClientLevel.class);
+    static {
+        try {
+            Field isClientSide = ClientLevel.class.getField("isClientSide");
+            isClientSide.setAccessible(true);
+            isClientSide.set(MOCK_CLIENT, true);
+        } catch (Exception e) {
+            throw new AssertionError("Cannot set isClientSide property on mock client level!");
+        }
+    }
+    private static final BlockHitResult BLOCK_HIT_RESULT = new BlockHitResult(Vec3.ZERO, Direction.DOWN, BlockPos.ZERO, true);
+
     public JsonObject getRemapBlock(BlockState state, String identifier) {
         JsonObject object = new JsonObject();
         BlockEntry blockEntry = BLOCK_ENTRIES.get(identifier);
@@ -698,6 +751,16 @@ public class MappingsGenerator {
             // Banners and Shulker Boxes both depend on the block entity.
         }
         object.addProperty("can_break_with_hand", !state.requiresCorrectToolForDrops());
+
+        try {
+            InteractionResult result = state.use(MOCK_CLIENT, null, null, BLOCK_HIT_RESULT);
+            if (result != InteractionResult.PASS) {
+                object.addProperty("default_interact_result", result.name());
+            }
+        } catch (Throwable e) {
+            // Ignore; this means the block has extended behavior we have to implement manually
+        }
+
         // Removes nbt tags from identifier
         // Add tool type for blocks that use shears or sword
         if (trimmedIdentifier.contains("_bed")) {
